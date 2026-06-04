@@ -237,7 +237,7 @@ def _fetch_batch_with_retry(w3, filter_params: dict) -> list[LogReceipt]:
         filter_params: eth_getLogs filter dict.
 
     Returns:
-        List of log entries (may be empty if no matching events in range).\
+        List of log entries (may be empty if no matching events in range).
 
     Raises:
         _BlockRangeTooLargeError: If the RPC signals the range is too large.
@@ -312,3 +312,11 @@ def get_event_signature_hash(event_signature: str) -> str:
     """
     w3 = get_client()
     return w3.keccak(text=event_signature).hex()
+
+def _is_range_error(exc: Exception) -> bool:
+    error_str = str(exc).lower()
+    keyword_hit = any(
+        kw in error_str
+        for kw in ("block range", "too large", "too wide", "limit exceeded", 
+                   "response size", "pruned", "pruned history")  # ← add these two
+    )
