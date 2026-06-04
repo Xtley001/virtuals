@@ -113,7 +113,7 @@ GRADUATION_EVENT_NAME: str = os.environ.get("GRADUATION_EVENT_NAME", "Launched")
 # Source: Basescan contract creation transaction.
 # Known approximate value: Virtuals fun.virtuals.io launched ~Oct 2024 ≈ block 20,000,000.
 # Operator should verify: basescan.org/address/<VIRTUALS_FACTORY_ADDRESS>#code
-GRADUATION_START_BLOCK: int = int(os.environ.get("GRADUATION_START_BLOCK", "20000000"))
+GRADUATION_START_BLOCK: int = int(os.environ.get("GRADUATION_START_BLOCK", "21000000"))
 
 # ── Analysis Window ───────────────────────────────────────────────────────────
 # Discovery always scans from GRADUATION_START_BLOCK to present.
