@@ -102,6 +102,26 @@ def run() -> pd.DataFrame:
 
     logger.info("Found %d raw graduation log entries. Processing...", len(raw_logs))
 
+    # ── Save raw scan checkpoint immediately — before any enrichment RPC calls ──
+    # This means if enrichment crashes (rate limits, etc.) the 13-min scan is not
+    # repeated. On next run, the checkpoint is loaded and enrichment resumes.
+    # Note: raw logs are not JSON-serialisable directly; we save the minimal fields.
+    raw_checkpoint_name = STAGE_NAME + "_raw"
+    if not checkpoint_exists(raw_checkpoint_name):
+        raw_records = [
+            {
+                "block_number": log["blockNumber"],
+                "tx_hash": log["transactionHash"].hex(),
+                "log_index": log["logIndex"],
+                "topics": [t.hex() if hasattr(t, "hex") else t for t in log.get("topics", [])],
+                "data": log.get("data", "0x") if isinstance(log.get("data"), str) else log.get("data", b"").hex(),
+                "address": log.get("address", ""),
+            }
+            for log in raw_logs
+        ]
+        save_checkpoint(raw_checkpoint_name, raw_records)
+        logger.info("Raw scan checkpointed (%d logs). Enrichment starting...", len(raw_logs))
+
     # ── Decode and enrich each event ─────────────────────────────────────────
     factory_contract = w3.eth.contract(
         address=w3.to_checksum_address(config.VIRTUALS_FACTORY_ADDRESS),
@@ -114,6 +134,9 @@ def run() -> pd.DataFrame:
             record = _process_log(w3, factory_contract, event_name, log, idx)
             if record is not None:
                 records.append(record)
+            # Small delay to avoid hammering free-tier RPCs during enrichment.
+            # 361 events × 0.05s = ~18s overhead — negligible vs scan time.
+            time.sleep(0.05)
         except Exception as exc:
             logger.warning(
                 "Failed to process log at block %s, tx %s: %s",
