@@ -67,7 +67,7 @@ def run() -> pd.DataFrame:
     logger.info("Current block: %d", current_block)
 
     # ── Fetch factory ABI from Basescan ──────────────────────────────────────
-    factory_abi = _fetch_factory_abi(config.VIRTUALS_FACTORY_ADDRESS)
+    factory_abi = _fetch_factory_abi(config.VIRTUALS_FACTORY_ADDRESS, w3)
 
     # ── Identify graduation event from ABI ───────────────────────────────────
     event_name, event_abi = _find_graduation_event(factory_abi)
@@ -161,23 +161,59 @@ def run() -> pd.DataFrame:
     return df
 
 
-def _fetch_factory_abi(factory_address: str) -> list:
+def _fetch_factory_abi(factory_address: str, w3: Web3) -> list:
     """
-    Fetch the verified ABI for the factory contract from Basescan API.
+    Fetch the verified ABI for the factory contract.
 
-    The ABI determines which event names exist and their parameter types.
-    We cannot hardcode the ABI because the factory is upgradeable.
+    Handles upgradeable proxies automatically: if the fetched ABI contains only
+    EIP-1967 proxy admin events (AdminChanged, Upgraded), the implementation
+    address is resolved via eth_getStorageAt and its ABI is fetched instead.
 
     Args:
-        factory_address: Checksummed contract address.
+        factory_address: Checksummed proxy or implementation address.
+        w3:              Connected Web3 instance (needed for storage slot reads).
+
+    Returns:
+        List of ABI entries from the implementation contract.
+
+    Raises:
+        RuntimeError: If Basescan returns an error or the contract is unverified.
+    """
+    abi = _fetch_abi_from_etherscan(factory_address)
+
+    # Detect upgradeable proxy: its own ABI only contains admin events.
+    # AdminChanged / Upgraded / BeaconUpgraded are the standard EIP-1967 signals.
+    event_names = {e["name"] for e in abi if e.get("type") == "event"}
+    proxy_signals = {"AdminChanged", "Upgraded", "BeaconUpgraded"}
+    if event_names and event_names.issubset(proxy_signals):
+        logger.info(
+            "Upgradeable proxy detected at %s (events: %s). "
+            "Resolving implementation via EIP-1967 storage slot...",
+            factory_address,
+            sorted(event_names),
+        )
+        impl_address = _resolve_eip1967_implementation(w3, factory_address)
+        logger.info("Implementation address: %s", impl_address)
+        abi = _fetch_abi_from_etherscan(impl_address)
+
+    return abi
+
+
+def _fetch_abi_from_etherscan(address: str) -> list:
+    """
+    Fetch the verified ABI for any contract address from Etherscan V2.
+
+    Args:
+        address: Checksummed contract address.
 
     Returns:
         List of ABI entries.
 
     Raises:
-        RuntimeError: If Basescan returns an error or the contract is unverified.
+        RuntimeError: If the fetch fails or the contract is unverified.
     """
     import requests
+    import json
 
     # Etherscan V2 unified endpoint — same key works, chainid selects the network.
     # Basescan V1 (api.basescan.org/api) is deprecated as of 2025.
@@ -186,7 +222,7 @@ def _fetch_factory_abi(factory_address: str) -> list:
         "chainid": config.BASE_CHAIN_ID,
         "module": "contract",
         "action": "getabi",
-        "address": factory_address,
+        "address": address,
         "apikey": config.BASESCAN_API_KEY,
     }
 
@@ -201,7 +237,7 @@ def _fetch_factory_abi(factory_address: str) -> list:
                 result = data.get("result", "")
                 if "not verified" in str(result).lower() or "not found" in str(result).lower():
                     raise RuntimeError(
-                        f"Factory contract {factory_address} is not verified on Basescan.\n"
+                        f"Contract {address} is not verified on Basescan.\n"
                         "This is a hard requirement — we cannot trust an unverified ABI.\n"
                         "Confirm VIRTUALS_FACTORY_ADDRESS in .env points to the correct "
                         "verified contract."
@@ -211,11 +247,8 @@ def _fetch_factory_abi(factory_address: str) -> list:
                     f"message={message!r}, result={result!r}"
                 )
 
-            import json
             abi = json.loads(data["result"])
-            logger.info(
-                "Fetched ABI for %s: %d entries.", factory_address, len(abi)
-            )
+            logger.info("Fetched ABI for %s: %d entries.", address, len(abi))
             return abi
 
         except RuntimeError:
@@ -234,6 +267,53 @@ def _fetch_factory_abi(factory_address: str) -> list:
                 ) from exc
 
     raise RuntimeError("Unreachable: ABI fetch loop exhausted without raising.")
+
+
+def _resolve_eip1967_implementation(w3: Web3, proxy_address: str) -> str:
+    """
+    Read the implementation address from an EIP-1967 upgradeable proxy.
+
+    Tries the standard EIP-1967 slot first, then falls back to the legacy
+    OpenZeppelin unstructured storage slot.
+
+    Slots:
+        EIP-1967:  keccak256("eip1967.proxy.implementation") - 1
+        OZ legacy: keccak256("org.zeppelinos.proxy.implementation")
+
+    Args:
+        proxy_address: Checksummed proxy contract address.
+
+    Returns:
+        Checksummed implementation contract address.
+
+    Raises:
+        RuntimeError: If neither slot yields a non-zero address.
+    """
+    _SLOTS = [
+        ("EIP-1967",  "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"),
+        ("OZ legacy", "0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3"),
+    ]
+    _ZERO_ADDR = "0x" + "0" * 40
+
+    for label, slot in _SLOTS:
+        try:
+            raw = call_with_retry(
+                lambda s=slot: w3.eth.get_storage_at(proxy_address, s)
+            )
+            addr_hex = "0x" + raw.hex()[-40:]
+            if addr_hex != _ZERO_ADDR:
+                impl = w3.to_checksum_address(addr_hex)
+                logger.info("Resolved implementation via %s slot: %s", label, impl)
+                return impl
+            logger.debug("%s slot returned zero address — trying next slot.", label)
+        except Exception as exc:
+            logger.debug("Failed to read %s slot: %s", label, exc)
+
+    raise RuntimeError(
+        f"Could not resolve implementation address for proxy {proxy_address}.\n"
+        "Both EIP-1967 and OZ legacy slots returned zero.\n"
+        "Verify VIRTUALS_FACTORY_ADDRESS in .env is the correct upgradeable proxy."
+    )
 
 
 def _find_graduation_event(abi: list) -> tuple[str, dict]:
