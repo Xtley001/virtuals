@@ -179,8 +179,11 @@ def _fetch_factory_abi(factory_address: str) -> list:
     """
     import requests
 
-    url = "https://api.basescan.org/api"
+    # Etherscan V2 unified endpoint — same key works, chainid selects the network.
+    # Basescan V1 (api.basescan.org/api) is deprecated as of 2025.
+    url = "https://api.etherscan.io/v2/api"
     params = {
+        "chainid": config.BASE_CHAIN_ID,
         "module": "contract",
         "action": "getabi",
         "address": factory_address,

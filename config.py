@@ -193,6 +193,10 @@ RPC_MAX_RETRIES: int = 3
 RPC_RETRY_DELAY_SECONDS: float = 2.0
 
 # ── API Keys ──────────────────────────────────────────────────────────────────
+# Basescan / Etherscan V2: get a key at https://basescan.org/apis OR
+# https://etherscan.io/myaccount. Both work with the unified V2 endpoint
+# (api.etherscan.io/v2/api?chainid=8453) per the V2 migration guide:
+# https://docs.etherscan.io/v2-migration
 BASESCAN_API_KEY: str = os.environ["BASESCAN_API_KEY"]
 COINGECKO_API_KEY: str = os.environ.get("COINGECKO_API_KEY", "")  # optional
 

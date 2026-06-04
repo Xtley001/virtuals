@@ -305,8 +305,10 @@ def _count_prior_pool_interactions(wallet: str, graduation_timestamp: int) -> in
     seven_days_ago = graduation_timestamp - (7 * 24 * 3600)
     _basescan.wait()
 
-    url = "https://api.basescan.org/api"
+    # Etherscan V2 unified endpoint — chainid selects Base mainnet.
+    url = "https://api.etherscan.io/v2/api"
     params = {
+        "chainid": config.BASE_CHAIN_ID,
         "module": "account",
         "action": "tokentx",             # ERC-20 transfers — proxy for swap interactions
         "address": wallet,
@@ -374,8 +376,10 @@ def _get_wallet_age_days(wallet: str, graduation_timestamp: int) -> Optional[flo
     """
     _basescan.wait()
 
-    url = "https://api.basescan.org/api"
+    # Etherscan V2 unified endpoint — chainid selects Base mainnet.
+    url = "https://api.etherscan.io/v2/api"
     params = {
+        "chainid": config.BASE_CHAIN_ID,
         "module": "account",
         "action": "txlist",
         "address": wallet,
