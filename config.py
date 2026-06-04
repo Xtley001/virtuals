@@ -111,9 +111,33 @@ GRADUATION_EVENT_NAME: str = os.environ.get("GRADUATION_EVENT_NAME", "Launched")
 # The analysis window below further filters which events are included in P&L
 # simulation and summary stats — discovery always starts here.
 # Source: Basescan contract creation transaction.
-# Known approximate value: Virtuals fun.virtuals.io launched ~Oct 2024 ≈ block 20,000,000.
+#
+# FIX (2026-06-04): Default was 20_000_000 which predates the contract deployment
+# and caused Alchemy to return HTTP 400 (archive data out of range for free-tier keys).
+# Base genesis = Aug 9 2023; at ~2 s/block, Oct 2024 ≈ block 21,000,000.
+# The safe lower bound is ~21_000_000; set GRADUATION_START_BLOCK in your .env to
+# the exact factory deployment block from Basescan for the fastest scan.
 # Operator should verify: basescan.org/address/<VIRTUALS_FACTORY_ADDRESS>#code
 GRADUATION_START_BLOCK: int = int(os.environ.get("GRADUATION_START_BLOCK", "21000000"))
+
+# ── Startup validation: catch pre-contract start blocks immediately ───────────
+# Virtuals Protocol factory on Base was NOT deployed before block ~21,000,000.
+# Querying Alchemy for blocks before contract existence returns HTTP 400.
+# Fail fast here instead of silently burning RPC quota for 10+ minutes.
+_VIRTUALS_BASE_MINIMUM_BLOCK: int = 21_000_000
+if GRADUATION_START_BLOCK < _VIRTUALS_BASE_MINIMUM_BLOCK:
+    raise ValueError(
+        f"GRADUATION_START_BLOCK={GRADUATION_START_BLOCK} is too low.\n"
+        f"The Virtuals Protocol factory on Base was not deployed until ~block "
+        f"{_VIRTUALS_BASE_MINIMUM_BLOCK:,}. Scanning earlier blocks causes Alchemy "
+        f"to return HTTP 400 and wastes your RPC quota.\n\n"
+        f"Fix: update GRADUATION_START_BLOCK in your .env file:\n"
+        f"  GRADUATION_START_BLOCK=21000000   # safe lower bound\n"
+        f"  GRADUATION_START_BLOCK=22800000   # closer to actual deployment (~Jan 2025)\n\n"
+        f"For the exact block, check:\n"
+        f"  basescan.org/address/<VIRTUALS_FACTORY_ADDRESS>#code\n"
+        f"and look at the contract creation transaction."
+    )
 
 # ── Analysis Window ───────────────────────────────────────────────────────────
 # Discovery always scans from GRADUATION_START_BLOCK to present.
